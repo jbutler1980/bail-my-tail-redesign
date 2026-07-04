@@ -1,4 +1,4 @@
-# Claude autonomous PR agent (v3.3) — CANONICAL.
+# Claude autonomous PR agent (v3.4) — CANONICAL.
 # Source-of-truth copy in agent-ops. Propagate with scripts/fleet-autonomy.sh.
 #
 # Reviews every PR (correctness/security/intent), runs the repo's tests, pushes
@@ -9,8 +9,8 @@
 # v3   : MERGE_TOKEN-preferred merge (+ SHA-pinned action).
 # v3.1 : removed the --admin merge fallback (fleet security review).
 # v3.2 : do-not-merge label guard (parked PRs never merge).
-# v3.3 : global kill switch, model tiering (Haiku for bots), mandatory infra
-#        validation on gitops repos, and an @mention when the agent fails a PR.
+# v3.3 : global kill switch, model tiering, mandatory infra validation, fail @mention.
+# v3.4 : reviews run on Opus 4.8 (latest/strongest); Dependabot stays on Haiku 4.5.
 
 name: Claude PR Review
 
@@ -35,8 +35,8 @@ jobs:
       github.event.pull_request.draft == false &&
       !contains(github.event.pull_request.labels.*.name, 'do-not-merge')
     env:
-      # Cost tiering: trivial bot PRs (Dependabot) use Haiku; everything else Sonnet.
-      MODEL: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && 'claude-haiku-4-5-20251001' || 'claude-sonnet-4-6' }}
+      # Cost tiering: trivial bot PRs (Dependabot) use Haiku 4.5; everything else Opus 4.8.
+      MODEL: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && 'claude-haiku-4-5-20251001' || 'claude-opus-4-8' }}
     steps:
       - name: Global kill switch
         id: gate
