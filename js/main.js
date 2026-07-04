@@ -57,14 +57,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            try {
-                // Here you would typically send the form data to a server
-                // For now, we'll just show a success message
-                showNotification('Message sent successfully! We\'ll get back to you soon.', 'success');
-                contactForm.reset();
-            } catch (error) {
-                showNotification('There was an error sending your message. Please try again.', 'error');
-            }
+            // Form submission backend not yet configured.
+            // Direct users to phone contact so no messages are silently lost.
+            showNotification('For immediate assistance please call us: Flint 810-234-5776 | Detroit 313-345-9255', 'info');
+            contactForm.reset();
         });
     }
 
@@ -86,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
             padding: '1rem 2rem',
             borderRadius: '5px',
             color: 'white',
-            backgroundColor: type === 'success' ? '#28a745' : '#dc3545',
+            backgroundColor: type === 'success' ? '#28a745' : type === 'info' ? '#0056b3' : '#dc3545',
             boxShadow: '0 3px 10px rgba(0,0,0,0.2)',
             zIndex: '1000',
             animation: 'slideIn 0.5s ease-out forwards'
