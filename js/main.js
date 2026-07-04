@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Close mobile menu when clicking outside
     document.addEventListener('click', (e) => {
-        if (!e.target.closest('.navbar') && navMenu.classList.contains('active')) {
+        if (navMenu && !e.target.closest('.navbar') && navMenu.classList.contains('active')) {
             navMenu.classList.remove('active');
         }
     });
@@ -26,10 +26,10 @@ document.addEventListener('DOMContentLoaded', () => {
         anchor.addEventListener('click', function (e) {
             e.preventDefault();
             const target = document.querySelector(this.getAttribute('href'));
-            
+
             if (target) {
                 // Close mobile menu if open
-                navMenu.classList.remove('active');
+                if (navMenu) navMenu.classList.remove('active');
                 
                 // Scroll to target
                 target.scrollIntoView({

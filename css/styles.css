@@ -369,8 +369,3 @@ footer {
     }
 }
 
-.service-card,
-.faq-item,
-.contact-form {
-    animation: fadeIn 0.5s ease-out forwards;
-}
