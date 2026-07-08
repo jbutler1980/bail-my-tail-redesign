@@ -15,10 +15,10 @@
             <div class="container">
                 <div class="logo">
                     <a href="index.html">
-                        <img src="assets/images/logo.png" alt="Bail My Tail Logo" class="logo-img">
+                        <img src="assets/images/logo.png" alt="Bail My Tail Logo" class="logo-img" onerror="this.style.display='none'">
                     </a>
                 </div>
-                <button class="mobile-menu-btn">
+                <button class="mobile-menu-btn" aria-label="Toggle navigation menu" aria-expanded="false">
                     <span class="hamburger"></span>
                 </button>
                 <ul class="nav-menu">
@@ -133,10 +133,10 @@
                     </div>
                 </div>
                 <form id="contact-form" class="contact-form">
-                    <input type="text" placeholder="Your Name" required>
-                    <input type="email" placeholder="Your Email" required>
-                    <input type="tel" placeholder="Your Phone">
-                    <textarea placeholder="Your Message" required></textarea>
+                    <input type="text" name="name" placeholder="Your Name" required>
+                    <input type="email" name="email" placeholder="Your Email" required>
+                    <input type="tel" name="phone" placeholder="Your Phone">
+                    <textarea name="message" placeholder="Your Message" required></textarea>
                     <button type="submit" class="cta-button">Send Message</button>
                 </form>
             </div>
@@ -148,7 +148,7 @@
         <div class="container">
             <div class="footer-content">
                 <div class="footer-info">
-                    <img src="assets/images/logo.png" alt="Bail My Tail Logo" class="footer-logo">
+                    <img src="assets/images/logo.png" alt="Bail My Tail Logo" class="footer-logo" onerror="this.style.display='none'">
                     <p>Available 24/7 for your bail bond needs</p>
                 </div>
                 <div class="footer-links">
@@ -167,7 +167,7 @@
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2024 Bail My Tail. All rights reserved.</p>
+                <p>&copy; 2025 Bail My Tail. All rights reserved.</p>
             </div>
         </div>
     </footer>
