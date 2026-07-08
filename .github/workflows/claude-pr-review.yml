@@ -1,4 +1,4 @@
-# Claude autonomous PR agent (v3.4) — CANONICAL.
+# Claude autonomous PR agent (v3.5) — CANONICAL.
 # Source-of-truth copy in agent-ops. Propagate with scripts/fleet-autonomy.sh.
 #
 # Reviews every PR (correctness/security/intent), runs the repo's tests, pushes
@@ -11,6 +11,8 @@
 # v3.2 : do-not-merge label guard (parked PRs never merge).
 # v3.3 : global kill switch, model tiering, mandatory infra validation, fail @mention.
 # v3.4 : reviews run on Opus 4.8 (latest/strongest); Dependabot stays on Haiku 4.5.
+# v3.5 : allowed_bots — Dependabot-triggered runs no longer rejected by the action;
+#        fail-notify step now also fires when the review action itself errors.
 
 name: Claude PR Review
 
@@ -61,6 +63,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "dependabot,dependabot[bot]"
           prompt: |
             You are an autonomous senior engineer with merge authority over this pull
             request. Your job: review it, test it, fix what is fixable, and decide
@@ -116,7 +119,7 @@ jobs:
             --allowedTools "Read,Grep,Glob,Write,Edit,Bash"
 
       - name: Enforce verdict (fail closed) and notify on fail
-        if: steps.gate.outputs.go == 'true'
+        if: steps.gate.outputs.go == 'true' && !cancelled()
         env:
           GH_TOKEN: ${{ secrets.MERGE_TOKEN || github.token }}
         run: |
