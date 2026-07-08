@@ -5,9 +5,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (mobileMenuBtn && navMenu) {
         mobileMenuBtn.addEventListener('click', () => {
-            navMenu.classList.toggle('active');
+            const isOpen = navMenu.classList.toggle('active');
+            mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
             const hamburger = mobileMenuBtn.querySelector('.hamburger');
-            
+
             if (hamburger) {
                 hamburger.classList.toggle('active');
             }
@@ -18,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('click', (e) => {
         if (navMenu && !e.target.closest('.navbar') && navMenu.classList.contains('active')) {
             navMenu.classList.remove('active');
+            if (mobileMenuBtn) mobileMenuBtn.setAttribute('aria-expanded', 'false');
         }
     });
 
@@ -30,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (target) {
                 // Close mobile menu if open
                 if (navMenu) navMenu.classList.remove('active');
+                if (mobileMenuBtn) mobileMenuBtn.setAttribute('aria-expanded', 'false');
                 
                 // Scroll to target
                 target.scrollIntoView({

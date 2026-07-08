@@ -17,9 +17,9 @@ A modern, responsive redesign of the Bail My Tail website with improved user exp
   - Interactive elements with hover effects
   - Form validation and feedback
 
-- **Performance Optimized**
-  - Minified CSS and JavaScript
-  - Optimized image loading
+- **Performance Conscious**
+  - Lightweight, dependency-free vanilla CSS and JavaScript
+  - Graceful image fallbacks when assets are missing
   - Efficient animations using Intersection Observer
   - Smooth transitions and effects
 
