@@ -1,4 +1,4 @@
-# Claude autonomous PR agent (v3.5) — CANONICAL.
+# Claude autonomous PR agent (v3.6) — CANONICAL.
 # Source-of-truth copy in agent-ops. Propagate with scripts/fleet-autonomy.sh.
 #
 # Reviews every PR (correctness/security/intent), runs the repo's tests, pushes
@@ -10,15 +10,18 @@
 # v3.1 : removed the --admin merge fallback (fleet security review).
 # v3.2 : do-not-merge label guard (parked PRs never merge).
 # v3.3 : global kill switch, model tiering, mandatory infra validation, fail @mention.
-# v3.4 : reviews run on Opus 4.8 (latest/strongest); Dependabot stays on Haiku 4.5.
+# v3.4 : reviews on Opus 4.8. (Retired in v3.6 — $400/8-day burn.)
 # v3.5 : allowed_bots — Dependabot-triggered runs no longer rejected by the action;
 #        fail-notify step now also fires when the review action itself errors.
+# v3.6 : cost controls — reviews on Sonnet 4.6; labeled/unlabeled triggers removed
+#        (adding do-not-merge still blocks future runs, but label changes no longer
+#        fire a full re-review; close/reopen a PR to force a re-run).
 
 name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
@@ -37,8 +40,8 @@ jobs:
       github.event.pull_request.draft == false &&
       !contains(github.event.pull_request.labels.*.name, 'do-not-merge')
     env:
-      # Cost tiering: trivial bot PRs (Dependabot) use Haiku 4.5; everything else Opus 4.8.
-      MODEL: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && 'claude-haiku-4-5-20251001' || 'claude-opus-4-8' }}
+      # Cost tiering: trivial bot PRs (Dependabot) use Haiku 4.5; everything else Sonnet 4.6.
+      MODEL: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && 'claude-haiku-4-5-20251001' || 'claude-sonnet-4-6' }}
     steps:
       - name: Global kill switch
         id: gate
