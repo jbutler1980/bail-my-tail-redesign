@@ -28,6 +28,7 @@ jobs:
       models: read
       pull-requests: read
     outputs:
+      reviewed-base-ref: ${{ steps.verdict.outputs.reviewed-base-ref }}
       reviewed-base-sha: ${{ steps.verdict.outputs.reviewed-base-sha }}
       reviewed-chunk-count: ${{ steps.verdict.outputs.reviewed-chunk-count }}
       reviewed-chunk-manifest-sha256: ${{ steps.verdict.outputs.reviewed-chunk-manifest-sha256 }}
@@ -56,12 +57,14 @@ jobs:
       - name: Materialize complete immutable pull request data
         id: source
         env:
+          EXPECTED_BASE_REF: ${{ github.event.repository.default_branch }}
           EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          test "$EXPECTED_BASE_REF" = "$(git check-ref-format --branch "$EXPECTED_BASE_REF")"
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
@@ -80,11 +83,13 @@ jobs:
           gh api "/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "$pr"
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_ref "$EXPECTED_BASE_REF" \
             --arg base "$EXPECTED_BASE_SHA" \
             --arg head "$EXPECTED_HEAD_SHA" '
             .state == "open"
             and .draft == false
-            and .base.ref == "main"
+            and .base.ref == $base_ref
+            and .base.ref == .base.repo.default_branch
             and .base.sha == $base
             and .head.repo.full_name == $repository
             and .head.sha == $head
@@ -100,7 +105,7 @@ jobs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${git_auth}"
           git -C "$repository" -c protocol.version=2 fetch \
             --quiet --no-tags --no-write-fetch-head origin \
-            "+refs/heads/main:refs/review/base" \
+            "+${EXPECTED_BASE_SHA}:refs/review/base" \
             "+refs/pull/${PR_NUMBER}/head:refs/review/head"
           unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 git_auth
           test "$(git -C "$repository" rev-parse refs/review/base)" = "$EXPECTED_BASE_SHA"
@@ -188,6 +193,7 @@ jobs:
           PY
 
           {
+            echo "base-ref=$EXPECTED_BASE_REF"
             echo "base-sha=$EXPECTED_BASE_SHA"
             echo "head-sha=$EXPECTED_HEAD_SHA"
             echo "merge-tree-sha=$merge_tree"
@@ -200,6 +206,7 @@ jobs:
         id: chunks
         env:
           DIFF_FILE: ${{ steps.source.outputs.diff-file }}
+          EXPECTED_BASE_REF: ${{ steps.source.outputs.base-ref }}
           EXPECTED_BASE_SHA: ${{ steps.source.outputs.base-sha }}
           EXPECTED_HEAD_SHA: ${{ steps.source.outputs.head-sha }}
           EXPECTED_MERGE_TREE_SHA: ${{ steps.source.outputs.merge-tree-sha }}
@@ -220,7 +227,7 @@ jobs:
           python3 - \
             "$DIFF_FILE" "$chunk_dir" "$manifest" "$REPOSITORY_DIR" \
             "$GITHUB_REPOSITORY" "$PR_NUMBER" \
-            "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA" \
+            "$EXPECTED_BASE_REF" "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA" \
             "$EXPECTED_MERGE_TREE_SHA" "$EXPECTED_WORKFLOW_SHA256" <<'PY'
           import hashlib
           import json
@@ -246,8 +253,9 @@ jobs:
           repository_dir = Path(sys.argv[4])
           repository = sys.argv[5]
           pull_request = int(sys.argv[6])
-          base_sha, head_sha, merge_tree_sha = sys.argv[7:10]
-          workflow_sha256 = sys.argv[10]
+          base_ref = sys.argv[7]
+          base_sha, head_sha, merge_tree_sha = sys.argv[8:11]
+          workflow_sha256 = sys.argv[11]
           exact = diff_path.read_bytes()
           text = exact.decode("utf-8")
 
@@ -494,6 +502,7 @@ jobs:
               "protocol": "bounded-diff-chunks-v1",
               "repository": repository,
               "pull_request": pull_request,
+              "base_ref": base_ref,
               "base_sha": base_sha,
               "head_sha": head_sha,
               "merge_tree_sha": merge_tree_sha,
@@ -755,6 +764,7 @@ jobs:
             protocol,
             repository,
             pull_request,
+            base_ref,
             base_sha,
             head_sha,
             merge_tree_sha,
@@ -819,6 +829,7 @@ jobs:
                           protocol: $review.protocol,
                           repository: $review.repository,
                           pull_request: $review.pull_request,
+                          base_ref: $review.base_ref,
                           base_sha: $review.base_sha,
                           head_sha: $review.head_sha,
                           merge_tree_sha: $review.merge_tree_sha,
@@ -1018,6 +1029,7 @@ jobs:
               model: $model,
               repository: $review.repository,
               pull_request: $review.pull_request,
+              base_ref: $review.base_ref,
               base_sha: $review.base_sha,
               head_sha: $review.head_sha,
               merge_tree_sha: $review.merge_tree_sha,
@@ -1240,6 +1252,7 @@ jobs:
         id: verdict
         if: always()
         env:
+          EXPECTED_BASE_REF: ${{ steps.source.outputs.base-ref }}
           EXPECTED_BASE_SHA: ${{ steps.source.outputs.base-sha }}
           EXPECTED_CHUNK_COUNT: ${{ steps.chunks.outputs.chunk-count }}
           EXPECTED_CHUNK_MANIFEST_SHA256: ${{ steps.chunks.outputs.chunk-manifest-sha256 }}
@@ -1257,6 +1270,7 @@ jobs:
           STRUCTURED_VERDICT: ${{ steps.claude.outputs.verdict }}
         run: |
           set -euo pipefail
+          test "$EXPECTED_BASE_REF" = "$(git check-ref-format --branch "$EXPECTED_BASE_REF")"
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CHUNK_COUNT" =~ ^[1-9][0-9]*$ ]]
           test "$EXPECTED_CHUNK_COUNT" -le 15
@@ -1283,6 +1297,7 @@ jobs:
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
             --argjson pull_request "$EXPECTED_PR_NUMBER" \
+            --arg base_ref "$EXPECTED_BASE_REF" \
             --arg base_sha "$EXPECTED_BASE_SHA" \
             --argjson chunk_count "$EXPECTED_CHUNK_COUNT" \
             --arg chunk_manifest_sha256 "$EXPECTED_CHUNK_MANIFEST_SHA256" \
@@ -1297,6 +1312,7 @@ jobs:
             --arg workflow_sha256 "$EXPECTED_WORKFLOW_SHA256" '
             .review.repository == $repository
             and .review.pull_request == $pull_request
+            and .review.base_ref == $base_ref
             and .review.base_sha == $base_sha
             and .review.chunk_count == $chunk_count
             and .review.chunk_manifest_sha256 == $chunk_manifest_sha256
@@ -1339,6 +1355,7 @@ jobs:
           test "$INJECTION_DETECTED" = "false"
           test "$STRUCTURED_VERDICT" = "pass"
           {
+            echo "reviewed-base-ref=$EXPECTED_BASE_REF"
             echo "reviewed-base-sha=$EXPECTED_BASE_SHA"
             echo "reviewed-chunk-count=$EXPECTED_CHUNK_COUNT"
             echo "reviewed-chunk-manifest-sha256=$EXPECTED_CHUNK_MANIFEST_SHA256"
@@ -1368,6 +1385,7 @@ jobs:
     steps:
       - name: Revalidate and publish non-authorizing review evidence
         env:
+          EXPECTED_BASE_REF: ${{ needs.claude-review.outputs.reviewed-base-ref }}
           EXPECTED_BASE_SHA: ${{ needs.claude-review.outputs.reviewed-base-sha }}
           EXPECTED_CHUNK_COUNT: ${{ needs.claude-review.outputs.reviewed-chunk-count }}
           EXPECTED_CHUNK_MANIFEST_SHA256: ${{ needs.claude-review.outputs.reviewed-chunk-manifest-sha256 }}
@@ -1384,6 +1402,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          test "$EXPECTED_BASE_REF" = "$(git check-ref-format --branch "$EXPECTED_BASE_REF")"
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CHUNK_COUNT" =~ ^[1-9][0-9]*$ ]]
           test "$EXPECTED_CHUNK_COUNT" -le 15
@@ -1411,6 +1430,7 @@ jobs:
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
             --argjson pull_request "$PR_NUMBER" \
+            --arg base_ref "$EXPECTED_BASE_REF" \
             --arg base_sha "$EXPECTED_BASE_SHA" \
             --argjson chunk_count "$EXPECTED_CHUNK_COUNT" \
             --arg chunk_manifest_sha256 "$EXPECTED_CHUNK_MANIFEST_SHA256" \
@@ -1425,6 +1445,7 @@ jobs:
             --arg workflow_sha256 "$EXPECTED_WORKFLOW_SHA256" '
             .review.repository == $repository
             and .review.pull_request == $pull_request
+            and .review.base_ref == $base_ref
             and .review.base_sha == $base_sha
             and .review.chunk_count == $chunk_count
             and .review.chunk_manifest_sha256 == $chunk_manifest_sha256
@@ -1470,11 +1491,13 @@ jobs:
           gh api "/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "$pr"
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_ref "$EXPECTED_BASE_REF" \
             --arg base "$EXPECTED_BASE_SHA" \
             --arg head "$EXPECTED_HEAD_SHA" '
             .state == "open"
             and .draft == false
-            and .base.ref == "main"
+            and .base.ref == $base_ref
+            and .base.ref == .base.repo.default_branch
             and .base.sha == $base
             and .head.repo.full_name == $repository
             and .head.sha == $head
@@ -1484,6 +1507,7 @@ jobs:
           evidence="$(jq -cn \
             --arg repository "$GITHUB_REPOSITORY" \
             --argjson pull_request "$PR_NUMBER" \
+            --arg base_ref "$EXPECTED_BASE_REF" \
             --arg base_sha "$EXPECTED_BASE_SHA" \
             --argjson chunk_count "$EXPECTED_CHUNK_COUNT" \
             --arg chunk_manifest_sha256 "$EXPECTED_CHUNK_MANIFEST_SHA256" \
@@ -1501,6 +1525,7 @@ jobs:
             {
               repository: $repository,
               pull_request: $pull_request,
+              base_ref: $base_ref,
               base_sha: $base_sha,
               chunk_count: $chunk_count,
               chunk_manifest_sha256: $chunk_manifest_sha256,
