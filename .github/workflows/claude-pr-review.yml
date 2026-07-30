@@ -261,10 +261,39 @@ jobs:
             git init --bare --quiet "$repository"
             git -C "$repository" remote add origin \
               "https://github.com/${GITHUB_REPOSITORY}.git"
+            # Resource ceiling. These bounds exist to stop a hostile or
+            # runaway repository from exhausting the runner, and they are
+            # KEPT -- they are only sized to the fleet that actually exists.
+            #
+            # Three of them are co-dependent and must always move together:
+            #
+            #   ulimit -f     bash sets the SOFT AND HARD RLIMIT_FSIZE, in
+            #                 1024-byte blocks. prlimit cannot raise a hard
+            #                 limit unprivileged, so this must be >= --fsize
+            #                 or prlimit dies EPERM before git ever runs.
+            #   --fsize       caps the single largest file written, which is
+            #                 the pack index-pack streams to disk.
+            #   the `repository_bytes` assertion further down caps the whole
+            #                 materialized bare repository.
+            #
+            # Sized against the fleet's worst case, butler-websites: a 762MiB
+            # repository whose filtered --depth=2 fetch materializes
+            # 294,561,727 bytes, of which the pack alone is 294,472,170. The
+            # previous 128MiB --fsize/ulimit pair was 2.19x too small, so
+            # index-pack was killed mid-write and the fetch failed closed with
+            # `fetch-pack: invalid index-pack output`, exit 128, on every
+            # attempt of the retry above -- deterministically, since 07-19.
+            # 1GiB is 3.64x that worst case.
+            #
+            # --as is address space, not disk. index-pack MMAPS the pack it
+            # just wrote, so the floor tracks pack size: measured between
+            # 256MiB (fails "cannot be mapped") and 320MiB (succeeds) for the
+            # same repository. 2GiB is ~6.7x that floor and still an eighth of
+            # a standard runner, so a resource bomb is still bounded.
             (
-              ulimit -f 131072
+              ulimit -f 1048576
               timeout --kill-after=10s 90s \
-                prlimit --as=536870912 --fsize=134217728 --cpu=90 -- \
+                prlimit --as=2147483648 --fsize=1073741824 --cpu=90 -- \
                 git -C "$repository" \
                   -c core.hooksPath=/dev/null \
                   -c http.followRedirects=false \
@@ -347,7 +376,11 @@ jobs:
 
           repository_bytes="$(du -sb -- "$repository" | cut -f1)"
           [[ "$repository_bytes" =~ ^[0-9]+$ ]]
-          test "$repository_bytes" -le 134217728
+          # Same 1GiB bound as --fsize above, and for the same reason: the
+          # fleet's worst case materializes 294,561,727 bytes here, so the
+          # previous 128MiB cap would have rejected butler-websites even once
+          # the fetch itself was allowed to complete.
+          test "$repository_bytes" -le 1073741824
           git -C "$repository" cat-file --batch-all-objects \
             --batch-check='%(objecttype) %(objectsize)' \
             | awk '$1 == "blob" && $2 > 1048576 { exit 1 }'
