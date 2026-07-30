@@ -1502,10 +1502,10 @@ jobs:
                 # answer:
                 #
                 #   temperature: 0   -> HTTP 400 "Unsupported value:
-                #                       'temperature' does not support 0 with
+                #                       temperature does not support 0 with
                 #                       this model. Only the default (1) value
                 #                       is supported."
-                #   top_p: 0.5       -> HTTP 400 "'top_p' is not supported with
+                #   top_p: 0.5       -> HTTP 400 "top_p is not supported with
                 #                       this model."
                 #   top_p: 1         -> HTTP 200, but that is merely the
                 #                       default, and output still varied
