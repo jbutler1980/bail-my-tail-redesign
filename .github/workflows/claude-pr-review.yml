@@ -67,9 +67,10 @@ jobs:
           # base branch. Once the default branch moves, the frozen value can
           # never equal the live head again, so binding to it made every
           # subsequent event on an already-open pull request unreviewable
-          # forever. GitHub recomputes `refs/pull/N/merge` against the LIVE
-          # base, so the frozen value also could not satisfy the merge-parents
-          # assertion below. The frozen value is retained for diagnostics only.
+          # forever. The reviewed tree is now MERGED LOCALLY from this base and
+          # the pinned head, so nothing in this step depends on a server-side
+          # ref that has to agree with either of them. The frozen value is
+          # retained for diagnostics only.
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EXPECTED_BASE_SHA: ${{ github.workflow_sha }}
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -247,8 +248,8 @@ jobs:
           # Every attempt starts from a freshly re-created bare repository, so
           # no partial object state from a failed transfer can leak into the
           # next attempt, and the refspecs are attempt-invariant -- pinned to
-          # EXPECTED_BASE_SHA and the pull request refs -- so a retry can only
-          # re-request the same immutable inputs, never different ones. Every
+          # EXPECTED_BASE_SHA and the pull request head ref -- so a retry can
+          # only re-request the same immutable inputs, never different ones. Every
           # identity assertion below still runs on the FINAL fetched state.
           # After the third failure the step fails closed with the fetch's own
           # exit status, exactly as a single failed fetch always has. The only
@@ -277,13 +278,25 @@ jobs:
             #                 materialized bare repository.
             #
             # Sized against the fleet's worst case, butler-websites: a 762MiB
-            # repository whose filtered --depth=2 fetch materializes
-            # 294,561,727 bytes, of which the pack alone is 294,472,170. The
-            # previous 128MiB --fsize/ulimit pair was 2.19x too small, so
-            # index-pack was killed mid-write and the fetch failed closed with
-            # `fetch-pack: invalid index-pack output`, exit 128, on every
-            # attempt of the retry above -- deterministically, since 07-19.
-            # 1GiB is 3.64x that worst case.
+            # repository whose filtered fetch materializes 296,151,257 bytes,
+            # of which the pack is nearly all. The previous 128MiB
+            # --fsize/ulimit pair was 2.19x too small, so index-pack was killed
+            # mid-write and the fetch failed closed with `fetch-pack: invalid
+            # index-pack output`, exit 128, on every attempt of the retry
+            # above -- deterministically, since 07-19. 1GiB is 3.62x that
+            # worst case.
+            #
+            # The fetch is COMPLETE-HISTORY (blob-filtered) and NO LONGER
+            # DEPTH-LIMITED, because the merge below is computed locally and a
+            # shallow object database has no common ancestor to merge from:
+            # `git merge-tree` over the old two-commit fetch dies `refusing to
+            # merge unrelated histories` (measured). Complete history costs
+            # almost nothing next to the blobs the fetch already carried --
+            # the same worst case grew 1,586,799 bytes (+0.54%), and the
+            # largest growth measured anywhere in the fleet was 5,878,610
+            # bytes on a 1,204-commit repository whose total is still
+            # 12,615,050. Every measured repository fetches in under 16s of
+            # the 90s bound.
             #
             # --as is address space, not disk. index-pack MMAPS the pack it
             # just wrote, so the floor tracks pack size: measured between
@@ -301,11 +314,10 @@ jobs:
                   -c protocol.https.allow=always \
                   -c protocol.version=2 fetch \
                   --quiet --no-tags --no-write-fetch-head \
-                  --no-recurse-submodules --depth=2 \
+                  --no-recurse-submodules \
                   --filter=blob:limit=1048576 origin \
                   "+${EXPECTED_BASE_SHA}:refs/review/base" \
-                  "+refs/pull/${PR_NUMBER}/head:refs/review/head" \
-                  "+refs/pull/${PR_NUMBER}/merge:refs/review/merge"
+                  "+refs/pull/${PR_NUMBER}/head:refs/review/head"
             ) || fetch_status=$?
             if test "$fetch_status" -eq 0; then
               break
@@ -318,15 +330,62 @@ jobs:
           done
           unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 git_auth
           test "$fetch_status" -eq 0 || exit "$fetch_status"
-          test "$(git -C "$repository" rev-parse refs/review/base)" = "$EXPECTED_BASE_SHA"
-          test "$(git -C "$repository" rev-parse refs/review/head)" = "$EXPECTED_HEAD_SHA"
-          merge_commit="$(git -C "$repository" rev-parse refs/review/merge)"
-          [[ "$merge_commit" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C "$repository" cat-file -t "$merge_commit")" = "commit"
-          test "$(git -C "$repository" show --no-patch --format=%P "$merge_commit")" \
-            = "$EXPECTED_BASE_SHA $EXPECTED_HEAD_SHA"
-          merge_tree="$(git -C "$repository" rev-parse "${merge_commit}^{tree}")"
-          [[ "$merge_tree" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C "$repository" rev-parse refs/review/base)" \
+            = "$EXPECTED_BASE_SHA" \
+            || fail_source_assertion \
+              "fetched base is not the reviewed base object name; base_sha=${EXPECTED_BASE_SHA} base_ref=${EXPECTED_BASE_REF} pr=${PR_NUMBER}"
+          test "$(git -C "$repository" rev-parse refs/review/head)" \
+            = "$EXPECTED_HEAD_SHA" \
+            || fail_source_assertion \
+              "fetched head is not the reviewed head object name; head_sha=${EXPECTED_HEAD_SHA} pr=${PR_NUMBER}"
+
+          # The reviewed tree is MERGED HERE, from the two object names this
+          # run pinned, by this runner's git. It is therefore a pure function
+          # of EXPECTED_BASE_SHA and EXPECTED_HEAD_SHA and cannot be stale.
+          #
+          # It used to be read out of `refs/pull/N/merge`, and that was the
+          # single worst failure mode this reviewer had. GitHub recomputes that
+          # ref LAZILY: for the whole window after anything merges to the
+          # default branch, EVERY open pull request's merge ref still names the
+          # PREVIOUS base as a parent. The assertion that its parents were
+          # exactly `base head` therefore failed for a reason that had nothing
+          # to do with the pull request, on a bare message-less `test`, and a
+          # fresh event could not clear it -- a re-dispatch re-read the SAME
+          # lagging ref. Only pushing to the pull request branch forced GitHub
+          # to recompute, so one merge to the default branch could leave every
+          # open pull request red until each one was pushed to. Computing the
+          # merge locally deletes that dependency instead of waiting on it.
+          #
+          # The parent assertion it replaces is not weakened, it is discharged
+          # by construction: the merge cannot have any parents other than the
+          # two object names passed on this command line.
+          #
+          # GIT_NO_LAZY_FETCH keeps the merge inside the SAME 1 MiB acquisition
+          # boundary the changed-blob check below enforces. A content merge
+          # that would have to reach back to the promisor remote for an
+          # unfetched oversized blob fails here rather than silently widening
+          # that boundary.
+          merge_status=0
+          merge_tree="$(
+            GIT_NO_LAZY_FETCH=1 git -C "$repository" merge-tree --write-tree \
+              "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA" 2>/dev/null
+          )" || merge_status=$?
+          # Exit 1 is specifically "merged, with conflicts": git still prints a
+          # tree, followed by the conflicted paths. That tree is NOT reviewable
+          # and the paths are pull-request-controlled, so both the status and
+          # the captured output are rejected here and neither is echoed.
+          test "$merge_status" -ne 1 \
+            || fail_source_assertion \
+              "conflicted merge: the head does not merge cleanly into the reviewed base, so there is no single tree to review (git merge-tree exit 1). Merge or rebase the base branch into the pull request branch and push. base_sha=${EXPECTED_BASE_SHA} head_sha=${EXPECTED_HEAD_SHA} base_ref=${EXPECTED_BASE_REF} pr=${PR_NUMBER}"
+          test "$merge_status" -eq 0 \
+            || fail_source_assertion \
+              "the merge of the reviewed base and head could not be computed (git merge-tree exit ${merge_status}); this includes a content merge needing a changed blob outside the 1 MiB acquisition boundary. base_sha=${EXPECTED_BASE_SHA} head_sha=${EXPECTED_HEAD_SHA} pr=${PR_NUMBER}"
+          [[ "$merge_tree" =~ ^[0-9a-f]{40}$ ]] \
+            || fail_source_assertion \
+              "the locally merged tree is not a 40-hex object name (merge_tree_bytes=${#merge_tree}); base_sha=${EXPECTED_BASE_SHA} head_sha=${EXPECTED_HEAD_SHA} pr=${PR_NUMBER}"
+          test "$(git -C "$repository" cat-file -t "$merge_tree")" = "tree" \
+            || fail_source_assertion \
+              "the locally merged object is not a tree; merge_tree=${merge_tree} pr=${PR_NUMBER}"
 
           changed_raw="$input_dir/changed-objects.raw"
           changed_blob_oids="$input_dir/changed-blob-oids"
@@ -380,7 +439,9 @@ jobs:
           # fleet's worst case materializes 294,561,727 bytes here, so the
           # previous 128MiB cap would have rejected butler-websites even once
           # the fetch itself was allowed to complete.
-          test "$repository_bytes" -le 1073741824
+          test "$repository_bytes" -le 1073741824 \
+            || fail_source_assertion \
+              "materialized repository exceeds the acquisition ceiling (repository_bytes=${repository_bytes} limit=1073741824); use an independent review path. pr=${PR_NUMBER}"
           git -C "$repository" cat-file --batch-all-objects \
             --batch-check='%(objecttype) %(objectsize)' \
             | awk '$1 == "blob" && $2 > 1048576 { exit 1 }'
