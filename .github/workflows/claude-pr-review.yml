@@ -365,21 +365,44 @@ jobs:
           # that would have to reach back to the promisor remote for an
           # unfetched oversized blob fails here rather than silently widening
           # that boundary.
+          # The merge runs inside the SAME resource sandbox as the fetch, and
+          # for the same reason. Reading a merge out of `refs/pull/N/merge` was
+          # a `rev-parse`; computing one is real work over pull-request-
+          # controlled trees and blobs, and it WRITES objects. An adversarial
+          # commit graph or a rename-heavy tree could otherwise consume the
+          # runner's CPU, address space and disk until the 40-minute job
+          # timeout -- long after `repository_bytes`, which is measured later,
+          # could have said anything about it. Identical bounds to the fetch,
+          # and `ulimit -f` moves in lockstep with `--fsize` for the same
+          # EPERM reason documented there.
+          merge_output="$input_dir/merge-tree.out"
           merge_status=0
-          merge_tree="$(
-            GIT_NO_LAZY_FETCH=1 git -C "$repository" merge-tree --write-tree \
-              "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA" 2>/dev/null
-          )" || merge_status=$?
-          # Exit 1 is specifically "merged, with conflicts": git still prints a
-          # tree, followed by the conflicted paths. That tree is NOT reviewable
-          # and the paths are pull-request-controlled, so both the status and
-          # the captured output are rejected here and neither is echoed.
-          test "$merge_status" -ne 1 \
-            || fail_source_assertion \
+          (
+            ulimit -f 1048576
+            timeout --kill-after=10s 90s \
+              prlimit --as=2147483648 --fsize=1073741824 --cpu=90 -- \
+              env GIT_NO_LAZY_FETCH=1 git -C "$repository" merge-tree \
+                --write-tree "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA"
+          ) > "$merge_output" 2>/dev/null || merge_status=$?
+          # git prints the merged tree on the FIRST line in both the clean and
+          # the conflicted case; the conflicted case then adds
+          # pull-request-controlled paths, which is why only line one is ever
+          # read and it is regex-validated before any use.
+          merge_tree="$(head -n 1 -- "$merge_output" 2>/dev/null || printf '')"
+          # Exit 1 is specifically "merged, with conflicts". Anything else
+          # non-zero -- the sandbox refusing, the timeout killing it, a missing
+          # object -- is "could not be computed". They are told apart by git's
+          # own output shape as well as by the status, so a sandbox failure
+          # that happens to exit 1 can never be reported as a clean conflict,
+          # and a conflicted merge can never be reported as a clean one.
+          if test "$merge_status" -eq 1 \
+            && [[ "$merge_tree" =~ ^[0-9a-f]{40}$ ]]; then
+            fail_source_assertion \
               "conflicted merge: the head does not merge cleanly into the reviewed base, so there is no single tree to review (git merge-tree exit 1). Merge or rebase the base branch into the pull request branch and push. base_sha=${EXPECTED_BASE_SHA} head_sha=${EXPECTED_HEAD_SHA} base_ref=${EXPECTED_BASE_REF} pr=${PR_NUMBER}"
+          fi
           test "$merge_status" -eq 0 \
             || fail_source_assertion \
-              "the merge of the reviewed base and head could not be computed (git merge-tree exit ${merge_status}); this includes a content merge needing a changed blob outside the 1 MiB acquisition boundary. base_sha=${EXPECTED_BASE_SHA} head_sha=${EXPECTED_HEAD_SHA} pr=${PR_NUMBER}"
+              "the merge of the reviewed base and head could not be computed (git merge-tree exit ${merge_status}); the merge is bounded by the same timeout, prlimit and ulimit as the fetch, and this includes a content merge needing a changed blob outside the 1 MiB acquisition boundary. base_sha=${EXPECTED_BASE_SHA} head_sha=${EXPECTED_HEAD_SHA} pr=${PR_NUMBER}"
           [[ "$merge_tree" =~ ^[0-9a-f]{40}$ ]] \
             || fail_source_assertion \
               "the locally merged tree is not a 40-hex object name (merge_tree_bytes=${#merge_tree}); base_sha=${EXPECTED_BASE_SHA} head_sha=${EXPECTED_HEAD_SHA} pr=${PR_NUMBER}"
